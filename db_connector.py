@@ -1,33 +1,78 @@
 import sqlite3
 import os
 
-DB_PATH = "johnny_tec.db"
+# Updated to save inside the 'database' folder shown in your repo
+DB_PATH = "database/johnny_tec.db"
 
 def get_db_connection():
+    # Ensure the directory exists before connecting
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    
+    # Enforce foreign key constraints
     conn.execute("PRAGMA foreign_keys = ON;")
     
-    # Auto-create tables on server start if they don't exist
     cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS conversations (
+    
+    # Auto-create tables using the FULL Johnny Tec v1.0 Schema
+    cursor.executescript("""
+        CREATE TABLE IF NOT EXISTS developers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            user_message TEXT,
-            ai_response TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        );
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS memories (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            memory_type TEXT,
-            content TEXT,
+            name TEXT NOT NULL,
+            username TEXT NOT NULL,
+            role TEXT NOT NULL,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            email TEXT UNIQUE,
+            country TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS memories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            memory_type TEXT,
+            content TEXT NOT NULL,
+            importance TEXT DEFAULT 'normal',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS conversations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            user_message TEXT NOT NULL,
+            ai_response TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS lessons (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            lesson_name TEXT NOT NULL,
+            progress INTEGER DEFAULT 0,
+            score INTEGER DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+
+        -- Indexes for high-speed queries
+        CREATE INDEX IF NOT EXISTS idx_memories_user ON memories(user_id);
+        CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id);
+        CREATE INDEX IF NOT EXISTS idx_lessons_user ON lessons(user_id);
     """)
+    
+    # Create a default guest user. 
+    # Since foreign keys are ON, you cannot save a conversation without a valid user_id!
+    cursor.execute("INSERT OR IGNORE INTO users (id, name, email) VALUES (1, 'Guest User', 'guest@johnnytec.com')")
+    
     conn.commit()
     return conn
 
