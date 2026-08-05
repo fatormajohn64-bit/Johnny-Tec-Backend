@@ -1,13 +1,34 @@
 import sqlite3
 import os
 
-DB_PATH = "../johnny-tec-database/database/johnny_tec.db"
+DB_PATH = "johnny_tec.db"
 
 def get_db_connection():
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
+    
+    # Auto-create tables on server start if they don't exist
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS conversations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            user_message TEXT,
+            ai_response TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS memories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            memory_type TEXT,
+            content TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    conn.commit()
     return conn
 
 def save_conversation(user_id: int, user_message: str, ai_response: str):
@@ -29,4 +50,4 @@ def get_user_memories(user_id: int):
     ).fetchall()
     conn.close()
     return [f"{row['memory_type']}: {row['content']}" for row in rows]
-  
+    
