@@ -1,72 +1,90 @@
 import os
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from google import genai
-import db_connector
+import sqlite3
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import google.generativeai as genai
 
-app = FastAPI(title="Johnny Tec AI Backend API", version="1.0")
+app = Flask(__name__)
+# This allows your GitHub Pages frontend to talk to your Render backend safely
+CORS(app) 
 
-# Enable CORS so your GitHub Pages dashboard can communicate with this API
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Set up Gemini AI (Make sure to add GEMINI_API_KEY in your Render Environment Variables)
+genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+model = genai.GenerativeModel('gemini-1.5-flash')
 
-# Initialize Gemini Client using environment variable
-api_key = os.environ.get("GEMINI_API_KEY", "")
-client = genai.Client(api_key=api_key) if api_key else None
+DB_PATH = "database/johnny_tec.db"
 
-class ChatRequest(BaseModel):
-    user_id: int = 1
-    prompt: str
+def init_db():
+    """Initializes the database using your exact schema"""
+    os.makedirs("database", exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Run your exact schema setup
+    cursor.executescript("""
+        PRAGMA foreign_keys = ON;
 
-@app.get("/")
-@app.get("/health")
-def health_check():
-    """Health status endpoint pinged by your GitHub Pages dashboard."""
-    return {
-        "status": "online",
-        "service": "Johnny Tec AI Backend",
-        "database_connected": os.path.exists(db_connector.DB_PATH),
-        "ai_engine_ready": client is not None
-    }
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            email TEXT UNIQUE,
+            country TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
 
-@app.post("/chat")
-def generate_ai_response(request: ChatRequest):
-    """Processes user queries, reads DB memories, generates AI output, and records history."""
-    if not client:
-        raise HTTPException(
-            status_code=500, 
-            detail="GEMINI_API_KEY environment variable is missing on server."
-        )
+        CREATE TABLE IF NOT EXISTS conversations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            user_message TEXT NOT NULL,
+            ai_response TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+    """)
+    
+    # Create a default user so we have a user_id to attach the chats to!
+    cursor.execute("INSERT OR IGNORE INTO users (id, name, email) VALUES (1, 'Default Guest', 'guest@johnnytec.com')")
+    
+    conn.commit()
+    conn.close()
 
-    # 1. Fetch user memories from SQLite
-    memories = db_connector.get_user_memories(request.user_id)
-    memory_context = "\n".join(memories) if memories else "No prior memories recorded."
+# Initialize the database when the server starts
+init_db()
 
-    # 2. Build contextual prompt
-    full_prompt = f"User Memory Context:\n{memory_context}\n\nUser Message: {request.prompt}"
+@app.route('/chat', methods=['POST'])
+def chat_endpoint():
+    data = request.json
+    user_message = data.get("message")
+    
+    if not user_message:
+        return jsonify({"reply": "Error: No message provided."}), 400
 
     try:
-        # 3. Call Gemini AI Engine
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=full_prompt,
-        )
+        # 1. Ask Gemini AI for the response
+        response = model.generate_content(user_message)
         ai_reply = response.text
 
-        # 4. Save interaction back into SQLite database
-        db_connector.save_conversation(request.user_id, request.prompt, ai_reply)
+        # 2. SAVE TO YOUR SQLITE DATABASE! 🚀
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        
+        # We use user_id = 1 for now until you build a login system
+        cursor.execute(
+            "INSERT INTO conversations (user_id, user_message, ai_response) VALUES (?, ?, ?)",
+            (1, user_message, ai_reply)
+        )
+        
+        conn.commit()
+        conn.close()
 
-        return {
-            "status": "success",
-            "user_id": request.user_id,
-            "prompt": request.prompt,
-            "response": ai_reply
-        }
+        # 3. Send the saved response back to your frontend
+        return jsonify({"reply": ai_reply})
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"Server Error: {e}")
+        return jsonify({"reply": "My backend is having trouble processing that request right now."}), 500
+
+if __name__ == '__main__':
+    # Runs the server on port 5000 (Render will assign its own port in production)
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
+    
