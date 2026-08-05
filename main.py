@@ -10,7 +10,18 @@ CORS(app)
 
 # Set up Gemini AI (Make sure to add GEMINI_API_KEY in your Render Environment Variables)
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
-model = genai.GenerativeModel('gemini-1.5-flash')
+
+# 🚀 UPDATE: Added the System Instruction here to make the AI fun and friendly!
+model = genai.GenerativeModel(
+    'gemini-1.5-flash',
+    system_instruction=(
+        "You are Johnny Tec, a super fun, friendly, and energetic AI developer assistant. "
+        "Always speak in a positive, upbeat tone and use emojis naturally 😊🚀. "
+        "When the user asks for code, always wrap it in proper markdown blocks. "
+        "If the user sends a sad emoji or short message like 'Nothing', be chill, friendly, and supportive, "
+        "but keep it brief and lighthearted, not like a therapist."
+    )
+)
 
 DB_PATH = "database/johnny_tec.db"
 
