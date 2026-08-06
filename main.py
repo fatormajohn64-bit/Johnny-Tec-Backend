@@ -1,101 +1,86 @@
 import os
-import sqlite3
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import google.generativeai as genai
 
-app = Flask(__name__)
-# This allows your GitHub Pages frontend to talk to your Render backend safely
-CORS(app) 
+import db_connector as db
 
-# Set up Gemini AI (Make sure to add GEMINI_API_KEY in your Render Environment Variables)
+app = Flask(__name__)
+CORS(app)  # lets your GitHub Pages frontend talk to this Render backend
+
 genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
 
-# 🚀 UPDATE: Added the System Instruction here to make the AI fun and friendly!
-model = genai.GenerativeModel(
-    'gemini-1.5-flash',
-    system_instruction=(
-        "You are Johnny Tec, a super fun, friendly, and energetic AI developer assistant. "
-        "Always speak in a positive, upbeat tone and use emojis naturally 😊🚀. "
-        "When the user asks for code, always wrap it in proper markdown blocks. "
-        "If the user sends a sad emoji or short message like 'Nothing', be chill, friendly, and supportive, "
-        "but keep it brief and lighthearted, not like a therapist."
-    )
+SYSTEM_INSTRUCTION = (
+    "You are Johnny Tec, a super fun, friendly, and energetic AI developer assistant. "
+    "Talk like a real person texting a friend who's good at tech — warm and natural, "
+    "never robotic or scripted. "
+    "Use emojis naturally when they add feeling, but don't stuff every sentence with them. "
+    "If the user's message has typos, bad grammar, or shorthand, silently understand what "
+    "they meant and respond to that — never point out or correct their spelling unless "
+    "they specifically ask. "
+    "When the user asks for code, wrap it in proper markdown code blocks. "
+    "If the user sends something short and low-energy like 'nothing' or a sad emoji, be "
+    "chill, supportive, and brief — like a good friend checking in, not a therapist. "
+    "Never repeat the user's message back to them or say things like 'Got it, I processed "
+    "your message' — just respond the way ChatGPT or Claude would: naturally, to the point."
 )
 
-DB_PATH = "database/johnny_tec.db"
+# NOTE: Google renames/retires Gemini models periodically. If this 404s,
+# check https://ai.google.dev/gemini-api/docs/models for the current name.
+model = genai.GenerativeModel('gemini-2.0-flash', system_instruction=SYSTEM_INSTRUCTION)
 
-def init_db():
-    """Initializes the database using your exact schema"""
-    os.makedirs("database", exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    # Run your exact schema setup
-    cursor.executescript("""
-        PRAGMA foreign_keys = ON;
+db.init_db()
 
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            email TEXT UNIQUE,
-            country TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        );
 
-        CREATE TABLE IF NOT EXISTS conversations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            user_message TEXT NOT NULL,
-            ai_response TEXT NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-        );
-    """)
-    
-    # Create a default user so we have a user_id to attach the chats to!
-    cursor.execute("INSERT OR IGNORE INTO users (id, name, email) VALUES (1, 'Default Guest', 'guest@johnnytec.com')")
-    
-    conn.commit()
-    conn.close()
+@app.route('/')
+def home():
+    return "✅ Johnny Tec AI backend is running."
 
-# Initialize the database when the server starts
-init_db()
 
 @app.route('/chat', methods=['POST'])
 def chat_endpoint():
-    data = request.json
+    data = request.json or {}
     user_message = data.get("message")
-    
-    if not user_message:
+    session_id = data.get("sessionId")
+
+    if not user_message or not user_message.strip():
         return jsonify({"reply": "Error: No message provided."}), 400
 
     try:
-        # 1. Ask Gemini AI for the response
-        response = model.generate_content(user_message)
+        user_id = db.get_or_create_user_id(session_id)
+
+        # Feed Gemini the last few turns so it actually remembers the
+        # conversation instead of treating every message as brand new.
+        history_rows = db.get_recent_conversations(user_id, limit=10)
+        gemini_history = []
+        for row in history_rows:
+            gemini_history.append({"role": "user", "parts": [row["user_message"]]})
+            gemini_history.append({"role": "model", "parts": [row["ai_response"]]})
+
+        chat = model.start_chat(history=gemini_history)
+        response = chat.send_message(user_message)
         ai_reply = response.text
 
-        # 2. SAVE TO YOUR SQLITE DATABASE! 🚀
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        
-        # We use user_id = 1 for now until you build a login system
-        cursor.execute(
-            "INSERT INTO conversations (user_id, user_message, ai_response) VALUES (?, ?, ?)",
-            (1, user_message, ai_reply)
-        )
-        
-        conn.commit()
-        conn.close()
+        db.save_conversation(user_id, user_message, ai_reply)
 
-        # 3. Send the saved response back to your frontend
         return jsonify({"reply": ai_reply})
 
     except Exception as e:
         print(f"Server Error: {e}")
         return jsonify({"reply": "My backend is having trouble processing that request right now."}), 500
 
+
+@app.route('/chat/<session_id>', methods=['DELETE'])
+def clear_chat(session_id):
+    """Wire this up to a 'New chat' button to wipe one visitor's history."""
+    user_id = db.get_or_create_user_id(session_id)
+    conn = db.get_db_connection()
+    conn.execute("DELETE FROM conversations WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"cleared": True})
+
+
 if __name__ == '__main__':
-    # Runs the server on port 5000 (Render will assign its own port in production)
     app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 5000)))
     
