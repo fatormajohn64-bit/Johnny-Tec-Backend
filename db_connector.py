@@ -21,8 +21,11 @@ def init_db():
         CREATE TABLE IF NOT EXISTS developers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
-            username TEXT NOT NULL,
+            username TEXT NOT NULL UNIQUE,
             role TEXT NOT NULL,
+            bio TEXT,
+            github_url TEXT,
+            primary_stack TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -80,6 +83,32 @@ def init_db():
     cursor.execute(
         "INSERT OR IGNORE INTO users (id, name, email) VALUES (1, 'Default Guest', 'guest@johnnytec.com')"
     )
+
+    # Seed the developer profiles. UNIQUE(username) + OR IGNORE means this
+    # is safe to run on every startup without creating duplicates.
+    cursor.executemany(
+        """INSERT OR IGNORE INTO developers (name, username, role, bio, github_url, primary_stack)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        [
+            (
+                'John Fatoma',
+                'johnny-tec-dev',
+                'Founder & Lead Developer',
+                'Creator of Johnny Tec AI ecosystem.',
+                'https://github.com/johnny-tec-dev',
+                'Python, SQL, AI Architectures'
+            ),
+            (
+                'Invisible 911',
+                'invisible-911',
+                'Developer Alias',
+                'Secondary developer profile and system alias.',
+                'https://github.com/invisible-911',
+                'Database Engineering & Security'
+            ),
+        ]
+    )
+
     conn.commit()
     conn.close()
 
@@ -156,4 +185,4 @@ def save_memory(user_id: int, memory_type: str, content: str, importance: str = 
     )
     conn.commit()
     conn.close()
-        
+    
