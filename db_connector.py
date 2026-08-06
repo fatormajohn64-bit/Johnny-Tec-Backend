@@ -1,22 +1,22 @@
 import sqlite3
 import os
 
-# Updated to save inside the 'database' folder shown in your repo
 DB_PATH = "database/johnny_tec.db"
 
+
 def get_db_connection():
-    # Ensure the directory exists before connecting
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    
-    # Enforce foreign key constraints
     conn.execute("PRAGMA foreign_keys = ON;")
-    
+    return conn
+
+
+def init_db():
+    """Creates every table Johnny Tec needs. Safe to call on every startup —
+    CREATE TABLE IF NOT EXISTS won't touch data that's already there."""
+    conn = get_db_connection()
     cursor = conn.cursor()
-    
-    # Auto-create tables using the FULL Johnny Tec v1.0 Schema
     cursor.executescript("""
         CREATE TABLE IF NOT EXISTS developers (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -32,6 +32,15 @@ def get_db_connection():
             email TEXT UNIQUE,
             country TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
+        -- Maps an anonymous browser session (sent from the frontend) to a
+        -- user row, so each visitor gets their own history without a login.
+        CREATE TABLE IF NOT EXISTS sessions (
+            session_id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS memories (
@@ -63,36 +72,88 @@ def get_db_connection():
             FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
         );
 
-        -- Indexes for high-speed queries
         CREATE INDEX IF NOT EXISTS idx_memories_user ON memories(user_id);
         CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id);
         CREATE INDEX IF NOT EXISTS idx_lessons_user ON lessons(user_id);
     """)
-    
-    # Create a default guest user. 
-    # Since foreign keys are ON, you cannot save a conversation without a valid user_id!
-    cursor.execute("INSERT OR IGNORE INTO users (id, name, email) VALUES (1, 'Guest User', 'guest@johnnytec.com')")
-    
+
+    cursor.execute(
+        "INSERT OR IGNORE INTO users (id, name, email) VALUES (1, 'Default Guest', 'guest@johnnytec.com')"
+    )
     conn.commit()
-    return conn
+    conn.close()
+
+
+def get_or_create_user_id(session_id: str) -> int:
+    """Looks up which user a browser session belongs to, creating a new
+    guest user + session mapping the first time we see that session_id."""
+    if not session_id:
+        return 1  # fallback to the shared default guest
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    row = cursor.execute(
+        "SELECT user_id FROM sessions WHERE session_id = ?", (session_id,)
+    ).fetchone()
+
+    if row:
+        user_id = row["user_id"]
+    else:
+        cursor.execute(
+            "INSERT INTO users (name, email, country) VALUES (?, NULL, NULL)",
+            (f"Guest-{session_id[:8]}",)
+        )
+        user_id = cursor.lastrowid
+        cursor.execute(
+            "INSERT INTO sessions (session_id, user_id) VALUES (?, ?)",
+            (session_id, user_id)
+        )
+        conn.commit()
+
+    conn.close()
+    return user_id
+
 
 def save_conversation(user_id: int, user_message: str, ai_response: str):
     conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(
+    conn.execute(
         "INSERT INTO conversations (user_id, user_message, ai_response) VALUES (?, ?, ?)",
         (user_id, user_message, ai_response)
     )
     conn.commit()
     conn.close()
 
+
+def get_recent_conversations(user_id: int, limit: int = 10):
+    """Last N turns for this user, oldest first — this is what gives
+    Johnny Tec short-term memory of the conversation."""
+    conn = get_db_connection()
+    rows = conn.execute(
+        """SELECT user_message, ai_response FROM conversations
+           WHERE user_id = ? ORDER BY id DESC LIMIT ?""",
+        (user_id, limit)
+    ).fetchall()
+    conn.close()
+    return list(reversed(rows))
+
+
 def get_user_memories(user_id: int):
     conn = get_db_connection()
-    cursor = conn.cursor()
-    rows = cursor.execute(
-        "SELECT memory_type, content FROM memories WHERE user_id = ?", 
+    rows = conn.execute(
+        "SELECT memory_type, content FROM memories WHERE user_id = ?",
         (user_id,)
     ).fetchall()
     conn.close()
     return [f"{row['memory_type']}: {row['content']}" for row in rows]
-    
+
+
+def save_memory(user_id: int, memory_type: str, content: str, importance: str = "normal"):
+    conn = get_db_connection()
+    conn.execute(
+        "INSERT INTO memories (user_id, memory_type, content, importance) VALUES (?, ?, ?, ?)",
+        (user_id, memory_type, content, importance)
+    )
+    conn.commit()
+    conn.close()
+        
