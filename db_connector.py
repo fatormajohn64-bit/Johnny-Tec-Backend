@@ -167,6 +167,27 @@ def get_recent_conversations(user_id: int, limit: int = 10):
     return list(reversed(rows))
 
 
+def get_recent_activity(limit: int = 50):
+    """Fetches recent interactions across all users for the /logs endpoint."""
+    conn = get_db_connection()
+    rows = conn.execute(
+        """SELECT 
+            c.id,
+            c.user_id,
+            u.name AS user_name,
+            c.user_message,
+            c.ai_response,
+            c.created_at
+           FROM conversations c
+           LEFT JOIN users u ON c.user_id = u.id
+           ORDER BY c.id DESC
+           LIMIT ?""",
+        (limit,)
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
 def get_user_memories(user_id: int):
     conn = get_db_connection()
     rows = conn.execute(
@@ -180,9 +201,8 @@ def get_user_memories(user_id: int):
 def save_memory(user_id: int, memory_type: str, content: str, importance: str = "normal"):
     conn = get_db_connection()
     conn.execute(
-        "INSERT INTO memories (user_id, memory_type, content, importance) VALUES (?, ?, ?, ?)",
+        "INSERT INTO memories (user_id, memory_type, content, importance) VALUES (?, ?, ?)",
         (user_id, memory_type, content, importance)
     )
     conn.commit()
     conn.close()
-    
